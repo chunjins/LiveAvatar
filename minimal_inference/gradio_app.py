@@ -365,40 +365,22 @@ def initialize_pipeline(args, training_settings):
         )
         
         # Load LoRA if specified
-        if args.load_lora and args.lora_path is not None:
-            logging.info(f'Loading LoRA: path={args.lora_path}, rank={training_settings["lora_rank"]}, alpha={training_settings["lora_alpha"]}')
+        if args.load_lora and args.lora_path_dmd is not None:
+            logging.info(f'Loading LoRA: path={args.lora_path_dmd}, rank={training_settings["lora_rank"]}, alpha={training_settings["lora_alpha"]}')
             
-            if args.using_merged_ckpt is False:
+
+                
+            if args.lora_path_dmd is not None:
                 wan_s2v.add_lora_to_model(
                     wan_s2v.noise_model,
                     lora_rank=training_settings['lora_rank'],
                     lora_alpha=training_settings['lora_alpha'],
                     lora_target_modules=training_settings['lora_target_modules'],
                     init_lora_weights=training_settings['init_lora_weights'],
-                    pretrained_lora_path=args.lora_path,
+                    pretrained_lora_path=args.lora_path_dmd,
                     load_lora_weight_only=False,
                 )
-                
-                if args.lora_path_dmd is not None:
-                    wan_s2v.add_lora_to_model(
-                        wan_s2v.noise_model,
-                        lora_rank=training_settings['lora_rank'],
-                        lora_alpha=training_settings['lora_alpha'],
-                        lora_target_modules=training_settings['lora_target_modules'],
-                        init_lora_weights=training_settings['init_lora_weights'],
-                        pretrained_lora_path=args.lora_path_dmd,
-                        load_only=True,
-                    )
-            else:
-                if args.lora_path_dmd is not None:
-                    wan_s2v.add_lora_to_model(
-                        wan_s2v.noise_model,
-                        lora_rank=256,
-                        lora_alpha=256,
-                        lora_target_modules=training_settings['lora_target_modules'],
-                        init_lora_weights=training_settings['init_lora_weights'],
-                        pretrained_lora_path=args.lora_path_dmd
-                    )
+
         
         wan_s2v_pipeline = wan_s2v
         global_args = args

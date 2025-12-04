@@ -619,41 +619,22 @@ def generate(args, training_settings):
             single_gpu=args.single_gpu,
             offload_kv_cache=args.offload_kv_cache,
         )
-        if args.load_lora and args.lora_path is not None:
-            print(f'Use LoRA: lora path: {args.lora_path}, lora rank:', training_settings['lora_rank'] ,", lora alpha: ",training_settings['lora_alpha'])
+        if args.load_lora and args.lora_path_dmd is not None:
+            print(f'Use LoRA: lora path: {args.lora_path_dmd}, lora rank:', training_settings['lora_rank'] ,", lora alpha: ",training_settings['lora_alpha'])
             # for version <1.5.0, using ckpt not merged 还需要把ckpt path改了
-            if args.using_merged_ckpt is False:
-                wan_s2v.add_lora_to_model(
-                        wan_s2v.noise_model,
-                        lora_rank=training_settings['lora_rank'],
-                        lora_alpha=training_settings['lora_alpha'],
-                        lora_target_modules=training_settings['lora_target_modules'],
-                        init_lora_weights=training_settings['init_lora_weights'],
-                        pretrained_lora_path=args.lora_path,
-                        load_lora_weight_only=False,
-                    )
 
-                if args.lora_path_dmd is not None:
-                    wan_s2v.add_lora_to_model(
-                        wan_s2v.noise_model,
-                        lora_rank=training_settings['lora_rank'],
-                        lora_alpha=training_settings['lora_alpha'],
-                        lora_target_modules=training_settings['lora_target_modules'],
-                        init_lora_weights=training_settings['init_lora_weights'],
-                        pretrained_lora_path=args.lora_path_dmd,
-                        load_only=True,
-                    )
-            else:
-                # for version >=1.5.0, using merged ckpt,还需要把ckpt path改了
-                if args.lora_path_dmd is not None:
-                    wan_s2v.add_lora_to_model(
-                        wan_s2v.noise_model,
-                        lora_rank=256,
-                        lora_alpha=256,
-                        lora_target_modules=training_settings['lora_target_modules'],
-                        init_lora_weights=training_settings['init_lora_weights'],
-                        pretrained_lora_path=args.lora_path_dmd
-                    )
+
+            if args.lora_path_dmd is not None:
+                wan_s2v.add_lora_to_model(
+                    wan_s2v.noise_model,
+                    lora_rank=training_settings['lora_rank'],
+                    lora_alpha=training_settings['lora_alpha'],
+                    lora_target_modules=training_settings['lora_target_modules'],
+                    init_lora_weights=training_settings['init_lora_weights'],
+                    pretrained_lora_path=args.lora_path_dmd,
+                    load_lora_weight_only=False,
+                )
+
     else:
         assert False, "Only s2v is supported for now."
 

@@ -9,12 +9,11 @@ CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES /primus_xpfs_workspace_T04/huangshiji
      --training_config liveavatar/configs/s2v_causal_sft.yaml \
      --offload_model True \
      --convert_model_dtype \
-     --prompt "A vibrant 3D anime style avatar of a young blonde woman with high pigtails, wearing a black Gothic Lolita dress with an off-shoulder neckline, lace choker, and gloves, speaking playfully to the camera with expressive, exaggerated hand gestures and a slight smirk. The camera is steady, and the background is a dark, simple studio."  \
-     --image "examples/demo/case1.jpg" \
-     --audio "examples/talk.wav" \
+     --prompt "A stout, cheerful dwarf with a magnificent braided beard adorned with metal rings, wearing a heavy leather apron. He's standing in his fiery, cluttered forge, laughing heartily as he explains the mastery of his craft, holding up a glowing hammer. Style of Blizzard Entertainment cinematics (like World of Warcraft), warm, dynamic lighting from the forge."  \
+     --image "examples/dwarven_blacksmith.jpg" \
+     --audio "examples/dwarven_blacksmith.wav" \
      --infer_frames 48 \
      --load_lora \
-     --lora_path "/primus_xpfs_workspace_T04/huangyubo/Causvid/checkpoints/1005_s2v_causal_sft_1_4_0/ckpt/merged_model_step_step_25000/only_lora.pt"    \
      --lora_path_dmd "/primus_xpfs_workspace_T04/huangyubo/LongLive/1027_s2v_selfforcing_1_13_2/ckptcopy/step_2500_generator_lora.pt" \
      --sample_steps 4 \
      --sample_guide_scale 0 \

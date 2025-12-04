@@ -9,12 +9,11 @@ CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES /primus_xpfs_workspace_T04/huangshiji
      --training_config liveavatar/configs/s2v_causal_sft.yaml \
      --offload_model False \
      --convert_model_dtype \
-     --prompt "A close-up, black and white video of a 60-70 year old male digital human, resembling Albert Einstein. He has a surprised and curious expression with raised eyebrows and slightly parted lips, as if about to speak. He wears a dark suit, white shirt, and dark tie. In the dimly lit background to his right, a blackboard with a chalk circle and symbols like 'L' and 'K' is visible. The scene has a thoughtful, intelligent, and slightly whimsical atmosphere, rendered in a classic black and white film style."  \
-     --image "examples/demo/case1.jpg" \
-     --audio "examples/demo/case1_talker.wav" \
+     --prompt "A stout, cheerful dwarf with a magnificent braided beard adorned with metal rings, wearing a heavy leather apron. He's standing in his fiery, cluttered forge, laughing heartily as he explains the mastery of his craft, holding up a glowing hammer. Style of Blizzard Entertainment cinematics (like World of Warcraft), warm, dynamic lighting from the forge."  \
+     --image "examples/dwarven_blacksmith.jpg" \
+     --audio "examples/dwarven_blacksmith.wav" \
      --infer_frames 48 \
      --load_lora \
-     --lora_path "/primus_xpfs_workspace_T04/huangyubo/Causvid/checkpoints/1005_s2v_causal_sft_1_4_0/ckpt/merged_model_step_step_25000/only_lora.pt"    \
      --lora_path_dmd "/primus_xpfs_workspace_T04/huangyubo/LongLive/1027_s2v_selfforcing_1_13_2/ckptcopy/step_2500_generator_lora.pt" \
      --sample_steps 4 \
      --sample_guide_scale 0 \
