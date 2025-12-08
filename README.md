@@ -155,7 +155,7 @@ ckpt/
 
 
 ## 🚀 Inference
-### Real-time Inference with TPP (Recommended)
+### Real-time Inference with TPP
 > 💡 Currently, This command can run on GPUs with at least 80GB VRAM.
 ```bash
 # CLI Inference
