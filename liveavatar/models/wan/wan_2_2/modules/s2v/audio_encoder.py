@@ -88,6 +88,34 @@ class AudioEncoder():
         z = feat.to(dtype)  # Encoding for the motion
         return z
 
+    def extract_audio_feat_from_array(self,
+                                       audio_array,
+                                       sample_rate=16000,
+                                       return_all_layers=False,
+                                       dtype=torch.float32):
+        """从 numpy array 提取音频特征（不需要文件路径）"""
+        # 直接使用传入的 audio_array，不需要 librosa.load
+        audio_input = audio_array
+
+        input_values = self.processor(
+            audio_input, sampling_rate=sample_rate,
+            return_tensors="pt").input_values
+
+        # INFERENCE
+
+        # retrieve logits & take argmax
+        res = self.model(
+            input_values.to(device=self.model.device, dtype=torch.bfloat16), output_hidden_states=True)
+        if return_all_layers:
+            feat = torch.cat(res.hidden_states)
+        else:
+            feat = res.hidden_states[-1]
+        feat = linear_interpolation(
+            feat, input_fps=50, output_fps=self.video_rate)
+
+        z = feat.to(dtype)  # Encoding for the motion
+        return z
+
     def get_audio_embed_bucket(self,
                                audio_embed,
                                stride=2,

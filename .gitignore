@@ -19,6 +19,10 @@ timing_logs/
 pretrained/
 output/
 ckpt/
+Real*/
+tests/
+infinite_generate_test.sh
+streaming_output_test.py
 
 
 # C extensions

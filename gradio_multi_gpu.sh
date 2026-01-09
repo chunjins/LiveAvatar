@@ -9,6 +9,7 @@ export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=86400
 CUDA_VISIBLE_DEVICES=0,1,2,3,4
 export NCCL_DEBUG=WARN
 export NCCL_DEBUG_SUBSYS=OFF
+export HF_ENDPOINT=https://hf-mirror.com
 
 echo "=========================================="
 echo "Starting Gradio Web UI in Multi-GPU mode"

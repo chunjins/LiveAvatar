@@ -1,8 +1,9 @@
 # Copyright 2024-2025 The Alibaba Wan Team Authors. All rights reserved.
 import numpy as np
 import torch
+from ....inference_utils import conditional_compile
 
-
+# @conditional_compile
 def rope_precompute(x, grid_sizes, freqs, start=None):
     b, s, n, c = x.size(0), x.size(1), x.size(2), x.size(3) // 2
 

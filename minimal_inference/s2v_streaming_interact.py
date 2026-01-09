@@ -466,7 +466,7 @@ def generate(args, training_settings):
 
 
             if args.lora_path_dmd is not None:
-                wan_s2v.add_lora_to_model(
+                wan_s2v.noise_model = wan_s2v.add_lora_to_model(
                     wan_s2v.noise_model,
                     lora_rank=training_settings['lora_rank'],
                     lora_alpha=training_settings['lora_alpha'],

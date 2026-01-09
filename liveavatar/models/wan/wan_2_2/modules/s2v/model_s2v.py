@@ -32,6 +32,7 @@ from ..model import (
 from .audio_utils import AudioInjector_WAN, CausalAudioEncoder
 from .motioner import FramePackMotioner, MotionerTransformers
 from .s2v_utils import rope_precompute
+from ....inference_utils import conditional_compile
 
 
 def zero_module(module):
@@ -59,8 +60,8 @@ def torch_dfs(model: nn.Module, parent_name='root'):
         modules += child_modules
     return modules, module_names
 
-
 @amp.autocast(enabled=False)
+@conditional_compile
 def rope_apply(x, grid_sizes, freqs, start=None):
     n, c = x.size(2), x.size(3) // 2
     # loop over samples
@@ -77,7 +78,24 @@ def rope_apply(x, grid_sizes, freqs, start=None):
         output.append(x_i)
     return torch.stack(output).float()
 
-
+@amp.autocast(enabled=False)
+@conditional_compile
+def rope_apply_cond(x, grid_sizes, freqs, start=None):
+    n, c = x.size(2), x.size(3) // 2
+    # loop over samples
+    output = []
+    for i, _ in enumerate(x):
+        s = x.size(1)
+        x_i = torch.view_as_complex(x[i, :s].to(torch.float64).reshape(
+            s, n, -1, 2))
+        freqs_i = freqs[i, :s]
+        # apply rotary embedding
+        x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
+        x_i = torch.cat([x_i, x[i, s:]])
+        # append to collection
+        output.append(x_i)
+    return torch.stack(output).float()
+    
 @amp.autocast(enabled=False)
 def rope_apply_usp(x, grid_sizes, freqs):
     s, n, c = x.size(1), x.size(2), x.size(3) // 2

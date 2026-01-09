@@ -175,15 +175,10 @@ class WanS2V:
             convert_model_dtype=convert_model_dtype)
         self.noise_model.num_frame_per_block = self.num_frames_per_block
 
-        if not self.is_training:
-            self.audio_encoder = AudioEncoder(
-                model_id=os.path.join(checkpoint_dir,
-                                    "wav2vec2-large-xlsr-53-english"))
-        else:
-            self.audio_encoder = AudioEncoder_Training(
-                model_id=os.path.join(checkpoint_dir
-                ,
-                                    "wav2vec2-large-xlsr-53-english"))
+        self.audio_encoder = AudioEncoder(
+            device=self.device,
+            model_id=os.path.join(checkpoint_dir,
+                                "wav2vec2-large-xlsr-53-english"))
 
         if use_sp:
             self.sp_size = sp_size if sp_size is not None else get_world_size()
@@ -459,6 +454,39 @@ class WanS2V:
             audio_embed_bucket = audio_embed_bucket.permute(0, 2, 3, 1)
         return audio_embed_bucket, num_repeat
     
+    def encode_audio_from_array(self, audio_array, infer_frames):
+        """
+        从 numpy array 编码音频（用于流式输入）
+        
+        Args:
+            audio_array: numpy array, shape [samples], 16kHz
+            infer_frames: 推理帧数
+        
+        Returns:
+            audio_embed_bucket: 编码后的音频特征
+            num_repeat: 重复次数
+        """
+        assert self.is_training is False
+        z = self.audio_encoder.extract_audio_feat_from_array(
+            audio_array, 
+            return_all_layers=True,
+            dtype=self.param_dtype
+        )
+        audio_embed_bucket, num_repeat = self.audio_encoder.get_audio_embed_bucket_fps(
+            z, fps=self.fps, batch_frames=infer_frames, m=self.audio_sample_m)
+        audio_embed_bucket = audio_embed_bucket.to(self.device, self.param_dtype)
+        audio_embed_bucket = audio_embed_bucket.unsqueeze(0)
+        if len(audio_embed_bucket.shape) == 3:
+            audio_embed_bucket = audio_embed_bucket.permute(0, 2, 1)
+        elif len(audio_embed_bucket.shape) == 4:
+            audio_embed_bucket = audio_embed_bucket.permute(0, 2, 3, 1)
+        return audio_embed_bucket, num_repeat
+
+    def _streaming_encode_next_audio_block_or_random(self, block_frames: int):
+        chunk = self.get_audio_callback()
+        audio_embed, _ = self.encode_audio_from_array(chunk, infer_frames=block_frames)
+        return audio_embed[..., :block_frames].contiguous() #torch.Size([1, 25, 1024, 12])
+    
     def encode_audio_training(self, audio_tensor, infer_frames,fps,audio_sample_m = 0):
         assert self.is_training is True
         z = self.audio_encoder.extract_audio_feat_training(
@@ -655,18 +683,12 @@ class WanS2V:
     
     def _initialize_comm_group(self, num_gpus_dit=4, enable_vae_parallel=False):
         local_gpu_id = torch.distributed.get_rank()
-        tgt_gpu_id = local_gpu_id + 1
-        src_gpu_id = local_gpu_id - 1
-        if local_gpu_id == num_gpus_dit - 1 + int(enable_vae_parallel):
-            self.tgt_gpu = None
-        else:
-            self.tgt_gpu = tgt_gpu_id
 
-        if local_gpu_id == 0:
-            self.src_gpu = None
-        else:
-            self.src_gpu = src_gpu_id
-
+        self.tgt_gpu = (local_gpu_id + 1) % (num_gpus_dit+int(enable_vae_parallel)) if (local_gpu_id!=num_gpus_dit - 1 + int(enable_vae_parallel)) else None
+        self.src_gpu = (local_gpu_id - 1) % (num_gpus_dit+int(enable_vae_parallel)) if (local_gpu_id!=0) else None
+        self.audio_tgt_gpu = (local_gpu_id + 1) % (num_gpus_dit+int(enable_vae_parallel)) if (local_gpu_id!=num_gpus_dit - 1) else None
+        self.audio_src_gpu = (local_gpu_id - 1) % (num_gpus_dit+int(enable_vae_parallel)) if (local_gpu_id!=num_gpus_dit - 1 + int(enable_vae_parallel)) else None
+        
     def generate(
         self,
         input_prompt=None,
@@ -693,58 +715,12 @@ class WanS2V:
         dataset_sample_idx=0,
         drop_motion_noisy=False,
         num_gpus_dit=4,
-        max_repeat=1000000,
+        max_repeat=100000000,
         enable_vae_parallel=False,
         mask=None,
         input_video_for_sam2=None,
         enable_online_decode=False,
     ):
-        r"""
-        Generates video frames from input image and text prompt using diffusion process.
-
-        Args:
-            input_prompt (`str`):
-                Text prompt for content generation.
-            ref_image_path ('str'):
-                Input image path
-            audio_path ('str'):
-                Audio for video driven
-            num_repeat ('int'):
-                Number of clips to generate; will be automatically adjusted based on the audio length
-            pose_video ('str'):
-                If provided, uses a sequence of poses to drive the generated video
-            max_area (`int`, *optional*, defaults to 720*1280):
-                Maximum pixel area for latent space calculation. Controls video resolution scaling
-            infer_frames (`int`, *optional*, defaults to 80):
-                How many frames to generate per clips. The number should be 4n
-            shift (`float`, *optional*, defaults to 5.0):
-                Noise schedule shift parameter. Affects temporal dynamics
-                [NOTE]: If you want to generate a 480p video, it is recommended to set the shift value to 3.0.
-            sample_solver (`str`, *optional*, defaults to 'unipc'):
-                Solver used to sample the video.
-            sampling_steps (`int`, *optional*, defaults to 40):
-                Number of diffusion sampling steps. Higher values improve quality but slow generation
-            guide_scale (`float` or tuple[`float`], *optional*, defaults 5.0):
-                Classifier-free guidance scale. Controls prompt adherence vs. creativity.
-                If tuple, the first guide_scale will be used for low noise model and
-                the second guide_scale will be used for high noise model.
-            n_prompt (`str`, *optional*, defaults to ""):
-                Negative prompt for content exclusion. If not given, use `config.sample_neg_prompt`
-            seed (`int`, *optional*, defaults to -1):
-                Random seed for noise generation. If -1, use random seed
-            offload_model (`bool`, *optional*, defaults to True):
-                If True, offloads models to CPU during generation to save VRAM
-            init_first_frame (`bool`, *optional*, defaults to False):
-                Whether to use the reference image as the first frame (i.e., standard image-to-video generation)
-
-        Returns:
-            torch.Tensor:
-                Generated video frames tensor. Dimensions: (C, N H, W) where:
-                - C: Color channels (3 for RGB)
-                - N: Number of frames (81)
-                - H: Frame height (from max_area)
-                - W: Frame width from max_area)
-        """
         # ------------------------------------Step 1: prepare conditional inputs--------------------------------------
         
         size = self.get_gen_size(
@@ -753,133 +729,17 @@ class WanS2V:
             ref_image_path=ref_image_path,
             pre_video_path=None)
         HEIGHT, WIDTH = size
-        # HEIGHT, WIDTH = map(int, generate_size.split('*'))
-        # size = (HEIGHT, WIDTH)
         channel = 3
-
         resize_opreat = transforms.Resize(min(HEIGHT, WIDTH))
         crop_opreat = transforms.CenterCrop((HEIGHT, WIDTH))
         tensor_trans = transforms.ToTensor()
 
-
         ref_image = np.array(Image.open(ref_image_path).convert('RGB'))
 
-        # extract audio emb
-        if enable_tts is True:
-            audio_path = self.tts(tts_prompt_audio, tts_prompt_text, tts_text)
-        # audio_emb, nr = self.encode_audio(audio_path, infer_frames=infer_frames)
         self.audio_encoder.model.to(device=self.device, dtype=self.param_dtype)
         self.audio_encoder.model.requires_grad_(False)
         self.audio_encoder.model.eval()
-        
-        if '+' in audio_path:
-            audio_paths = audio_path.split('+')
-            audio_embs = []
-            nr_list = []
-            
-            for path in audio_paths:
-                audio_emb_i, nr_i = self.encode_audio(path, infer_frames=infer_frames)
-                audio_embs.append(audio_emb_i)
-                nr_list.append(nr_i)
-            
-            min_frames = min(emb.shape[-1] for emb in audio_embs)
-            audio_embs = [emb[..., :min_frames] for emb in audio_embs]
-            nr = min(nr_list)
-            audio_emb = torch.cat(audio_embs, dim=0)
-
-            # Process SAM2 and generate routing_logits if video path is provided
-            print(f"rank {dist.get_rank()} processing SAM2")
-            input_video_for_sam2 = input_video_for_sam2 if input_video_for_sam2 is not None else ref_image_path
-            routing_logits = None
-            rank = dist.get_rank()
-            
-            # Broadcast video path to all ranks
-            if rank == 0:
-                video_path_bytes = input_video_for_sam2.encode('utf-8')
-                path_length = torch.tensor([len(video_path_bytes)], dtype=torch.long, device=self.device)
-            else:
-                path_length = torch.tensor([0], dtype=torch.long, device=self.device)
-            dist.broadcast(path_length, src=0)
-            if rank == 0:
-                path_tensor = torch.ByteTensor(list(video_path_bytes)).to(self.device)
-            else:
-                path_tensor = torch.zeros(path_length.item(), dtype=torch.uint8, device=self.device)
-            dist.broadcast(path_tensor, src=0)
-            video_path = path_tensor.cpu().numpy().tobytes().decode('utf-8')
-            print(f"Rank {rank}: video_path: {video_path}")
-            
-            parent_dir = os.path.dirname(video_path)
-            sam2_output_base = parent_dir  
-            
-            if rank == 0:
-                sam2_cmd = [
-                    "python",
-                    "liveavatar/utils/router/sam2_tools.py",
-                    "--video_folder", video_path,
-                    "--output_path", sam2_output_base
-                ]
-                try:
-                    subprocess.run(sam2_cmd, check=True)
-                except subprocess.CalledProcessError as e:
-                    print(f"Rank {rank}: SAM2 processing failed: {e}")
-                    raise e
-                dist.barrier()
-            else:
-                dist.barrier()
-            
-            base_name = os.path.basename(video_path).split(".")[0]
-            tracking_mask_results_dir = os.path.join(
-                sam2_output_base,
-                base_name,
-                "tracking_mask_results"
-            )
-            print(f"Rank {rank}: Looking for masks in: {tracking_mask_results_dir}")
-            
-            target_shape = (1, infer_frames // 4, HEIGHT // 8, WIDTH // 8)
-            routing_logits = process_masks_to_routing_logits(
-                tracking_mask_results_dir,
-                shape=target_shape
-            )
-            num_actors = routing_logits.shape[-1]
-            routing_logits = routing_logits.reshape(1, infer_frames // 4, HEIGHT // 8 // 2, WIDTH // 8 // 2, num_actors)
-            routing_logits = routing_logits.to(device=self.device, dtype=self.param_dtype)
-            mask = routing_logits.permute(4,1,2,3,0)  # [num_actors, t, h, w, 1]
-
-            # 按比例进行二维空间膨胀（允许重叠）
-            def dilate_mask_by_ratio(mask_tensor: torch.Tensor, ratio: float = 0.3, thr: float = 0.5) -> torch.Tensor:
-                # mask_tensor: [A, T, H, W, 1]，值域 [0,1]
-                A, T, H, W, _ = mask_tensor.shape
-                out = torch.zeros_like(mask_tensor)
-                bin_mask = (mask_tensor > thr).to(dtype=mask_tensor.dtype)
-                for a in range(A):
-                    for t in range(T):
-                        m2d = bin_mask[a, t, :, :, 0]
-                        if m2d.any():
-                            ys, xs = torch.where(m2d)
-                            box_h = int(ys.max() - ys.min() + 1)
-                            box_w = int(xs.max() - xs.min() + 1)
-                            radius = max(1, int((ratio * max(box_h, box_w) + 0.9999)))
-                            k = 2 * radius + 1
-                            x = m2d[None, None, :, :]
-                            x = F.max_pool2d(x, kernel_size=k, stride=1, padding=radius)
-                            out[a, t, :, :, 0] = (x[0, 0] > 0).to(mask_tensor.dtype)
-                        else:
-                            out[a, t, :, :, 0] = m2d
-                return out
-
-            mask = dilate_mask_by_ratio(mask, ratio=0.1, thr=0.5)
-            mask_bool = mask > 0.5
-            total_count = mask_bool.sum(dim=0, keepdim=True)  # [1, t, h, w, 1], 统计该位置有多少角色为1
-            others_present = (total_count - mask_bool.to(total_count.dtype)) > 0  # [num_actors, t, h, w, 1]
-            mask = (~others_present).to(dtype=mask.dtype)
-            m=(mask[0][0].detach().to(torch.float16).cpu().numpy()>0.5).astype(np.uint8)*255; Image.fromarray(m.squeeze()).save("tmp/mask/mask.png")
-        else:
-            audio_emb, nr = self.encode_audio(audio_path, infer_frames=infer_frames)
-
-        
-        self.audio_encoder.model.to("cpu")
-        if num_repeat is None or num_repeat > nr:
-            num_repeat = nr
+        audio_emb, nr = self.encode_audio(audio_path, infer_frames=infer_frames)
 
         lat_motion_frames = (self.motion_frames + 3) // 4
         model_pic = crop_opreat(resize_opreat(Image.fromarray(ref_image)))
@@ -889,7 +749,9 @@ class WanS2V:
             0) * 2 - 1.0  # b c 1 h w
         ref_pixel_values = ref_pixel_values.to(
             dtype=self.vae.dtype, device=self.vae.device)
-        ref_latents = torch.stack(self.vae.encode(ref_pixel_values))
+        ref_pixel_values = ref_pixel_values.repeat(1, 1, 5, 1, 1)
+        ref_latents = torch.stack(self.vae.encode(ref_pixel_values))[:,:,1:]
+
 
         # drop_first_motion = self.drop_first_motion
         drop_first_motion = False
@@ -935,7 +797,7 @@ class WanS2V:
         ):
             out = []
             self.kv_cache1 = None
-            active_nr = min(max_repeat, num_repeat)
+            active_nr = max_repeat
             for r in range(active_nr):
             #-------------------------------------------rollout loop------------------------------------------------------
                 #----------------------------------------------Step 2.1: clip-level init------------------------------------------------------ 
@@ -976,9 +838,6 @@ class WanS2V:
                             device=self.device
                         )
 
-
-                #----------------------------------------------Step 2.2: prepare clip-level cond---------------------------------
-                if r==0 or in_dit_device:
                     clip_latents = deepcopy(clip_noise)
                     with torch.no_grad():
                         left_idx = r * infer_frames
@@ -1024,10 +883,20 @@ class WanS2V:
                         current_start=block_index * self.num_frames_per_block * frame_seq_length,
                         current_end=(block_index + 1) * self.num_frames_per_block * frame_seq_length)
                         
-
-
                 num_blocks = target_shape[0] // self.num_frames_per_block
                 for block_index in range(num_blocks):
+                    if enable_vae_parallel and (not in_dit_device) and r >= 2:
+                        if getattr(self, "audio_template", None) is None:
+                            # Use file-based audio embedding to build a template shape once.
+                            left0 = 0
+                            right0 = self.num_frames_per_block * 4
+                            self.audio_template = audio_emb[..., left0:right0].contiguous()
+                        audio_block = self._streaming_encode_next_audio_block_or_random(
+                            block_frames=self.num_frames_per_block * 4
+                        )
+                        if audio_block is not None and self.audio_tgt_gpu is not None:
+                            dist.send(audio_block.contiguous(), self.audio_tgt_gpu)
+
                     # 2.2.1 prepare block-level cond
                     if getattr(self, '_sampler_timesteps', None) is None:
                         sample_scheduler.set_timesteps(
@@ -1049,11 +918,11 @@ class WanS2V:
                         block_arg_c = {
                             'context': context[0:1], #list(1) torch.Size([19, 4096])
                             'seq_len': None,
-                            'cond_states': cond_latents[:,:,block_index * 
-                                            self.num_frames_per_block:(block_index + 1) * self.num_frames_per_block],
+                            'cond_states': cond_latents[:,:,0 * 
+                                            self.num_frames_per_block:(0 + 1) * self.num_frames_per_block],
                             "motion_latents": input_motion_latents,
                             'ref_latents': ref_latents,
-                            "audio_input": audio_input[..., left_idx:right_idx],
+                            # "audio_input": audio_input[..., left_idx:right_idx],
                             "motion_frames": [self.motion_frames, lat_motion_frames],
                             "drop_motion_frames": drop_first_motion and r == 0,
                         }
@@ -1066,6 +935,18 @@ class WanS2V:
                         else:  
                             latent_model_input = torch.empty_like(block_latents)  # 创建空tensor接收
                             dist.recv(latent_model_input, self.src_gpu)
+                        if getattr(self, 'audio_template', None) is None:
+                            self.audio_template = audio_input[..., 0: (self.num_frames_per_block * 4)].contiguous()
+                        if dist.get_rank() == 0:
+                            if r <=2:
+                                audio_input_block = torch.randn_like(self.audio_template)
+                            else:
+                                audio_input_block = torch.empty_like(self.audio_template)
+                                dist.recv(audio_input_block, self.audio_src_gpu)
+                        else:
+                            audio_input_block = torch.empty_like(self.audio_template) #torch.Size([1, 25, 1024, 12]
+                            dist.recv(audio_input_block, self.audio_src_gpu)
+                        block_arg_c["audio_input"] = audio_input_block
 
                         timestep = [t] * self.num_frames_per_block
                         timestep = torch.tensor(timestep).to(self.device).unsqueeze(0)
@@ -1091,22 +972,17 @@ class WanS2V:
                             pass
                         else:
                             dist.send(block_latents.contiguous(), self.tgt_gpu)
+                        if self.audio_tgt_gpu is None:
+                            pass
+                        else:
+                            dist.send(audio_input_block.contiguous(), self.audio_tgt_gpu)
+                        yield None
  
-                    if enable_vae_parallel and dist.get_rank() == num_gpus_dit-1+int(enable_vae_parallel):
-                            vae_wait_start = time.time()
-                            block_latents = torch.empty_like(block_latents)
-                            dist.recv(block_latents, self.src_gpu)
-                            torch.cuda.synchronize()
-                            if time.time() - vae_wait_start < 0.01:
-                                print(f"WARNING: VAE serves as a bottleneck!")
+                    if enable_vae_parallel and (not in_dit_device):
+                        block_latents = torch.empty_like(block_latents)
 
-                    #----------------------------------------------Step 2.3: block-level postprocess for vae---------------------------------
-                    if enable_vae_parallel and dist.get_rank() == num_gpus_dit-1+int(enable_vae_parallel):
-                        if offload_model:
-                            print(f"offloading model to cpu")
-                            self.noise_model.cpu()
-                            torch.cuda.synchronize()
-                            torch.cuda.empty_cache()
+                        dist.recv(block_latents, self.src_gpu)
+
                         if r == 0 and active_nr != 1:
                             if block_index == 0: #cache new ref
                                 ref_latents = block_latents.unsqueeze(0)[:,:,0:1] # 更新attention sink anchor到generated image，broadcast到所有rank
@@ -1121,30 +997,20 @@ class WanS2V:
                             self.vae.stream_decode(decode_latents)
                         decode_latents = block_latents.unsqueeze(0)
 
+                        torch.cuda.synchronize()
+                        vae_wait_start = time.time()
                         image = torch.stack(self.vae.stream_decode(decode_latents))
+                        torch.cuda.synchronize()
+                        vae_wait_time = time.time() - vae_wait_start
+                        print(f"[VAE] decoding for data from GPU {self.src_gpu}: {vae_wait_time:.4f}s")
+                        
                         image = image[:, :, -(infer_frames)//num_blocks:] # 3
                         
                         if r == 0 and block_index == 0:
                             image = image[:, :, 3:]#第一个clip第一个block保留0帧，后面3
                  
-                        out.append(image.cpu())
+                        yield image.cpu()
 
-        #-------------------------------------- Step 3: full-video postprocess--------------------------------------
-        if dist.is_initialized():
-                dist.barrier()
-        if dist.get_rank() == num_gpus_dit-1+int(enable_vae_parallel):
-            videos = torch.cat(out, dim=2)
-            del clip_noise, clip_latents, clip_output,block_latents
-            self._sampler_timesteps = None
-            self._sampler_sigmas = None
-            # del sample_scheduler
-            if offload_model:
-                gc.collect()
-                torch.cuda.synchronize()
-
-            return videos[0], dataset_info
-        else:
-            return None,dataset_info
     
 
     def tts(self, tts_prompt_audio, tts_prompt_text, tts_text):

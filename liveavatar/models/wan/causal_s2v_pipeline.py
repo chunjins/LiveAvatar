@@ -23,7 +23,7 @@ import torch.nn.functional as F
 from safetensors import safe_open
 from torchvision import transforms
 from tqdm import tqdm
-from peft import LoraConfig, inject_adapter_in_model
+from peft import LoraConfig, get_peft_model
 import subprocess
 from diffusers import FlowMatchEulerDiscreteScheduler
 from .wan_2_2.distributed.fsdp import shard_model
@@ -196,33 +196,40 @@ class WanS2V:
     def add_lora_to_model(self, model, lora_rank=4, lora_alpha=4, lora_target_modules="q,k,v,o,ffn.0,ffn.2", init_lora_weights="kaiming", pretrained_lora_path=None, state_dict_converter=None, load_only=False, load_lora_weight_only=False):
         if not load_only:
             self.lora_alpha = lora_alpha
-            if init_lora_weights == "kaiming":
-                init_lora_weights = True
-                
             lora_config = LoraConfig(
                 r=lora_rank,
                 lora_alpha=lora_alpha,
-                init_lora_weights=init_lora_weights,
+                init_lora_weights=True if init_lora_weights == "kaiming" else init_lora_weights,
                 target_modules=lora_target_modules.split(","),
             )
-            model = inject_adapter_in_model(lora_config, model)
+            model = get_peft_model(model, lora_config)
                 
         if pretrained_lora_path is not None:
             ori_pretrained_lora_path = pretrained_lora_path
             state_dict = load_state_dict(pretrained_lora_path)
             if state_dict_converter is not None:
                 state_dict = state_dict_converter(state_dict)
+            
+            # get_peft_model adds "base_model.model." prefix to the keys
+            first_key = next(iter(state_dict.keys()))
+            if not first_key.startswith("base_model.model."):
+                state_dict = {f"base_model.model.{k}": v for k, v in state_dict.items()}
+
             if load_lora_weight_only:
-                new_state_dict = {}
-                for key in state_dict.keys():
-                    if 'lora' in key:
-                        new_state_dict[key] = state_dict[key]
-                state_dict = new_state_dict
+                state_dict = {k: v for k, v in state_dict.items() if 'lora' in k}
+
             missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
             all_keys = [i for i, _ in model.named_parameters()]
             num_updated_keys = len(all_keys) - len(missing_keys)
             num_unexpected_keys = len(unexpected_keys)
             print(f"{num_updated_keys} parameters are loaded from {ori_pretrained_lora_path}. {num_unexpected_keys} parameters are unexpected.")
+            
+            # Merge weights and return base model
+            print(f"Merging LoRA weights from {ori_pretrained_lora_path}...")
+            model = model.merge_and_unload()
+            print(f"LoRA merged successfully.")
+            
+        return model
     
     def set_all_model_to_dtype_device(self, dtype, device):
         models = [

@@ -86,6 +86,8 @@
 ### ⚙️ **Later updates**
 
 - ✅ Inference code supporting single GPU (offline generation)
+- ✅ Further Speed up
+- ✅ Streaming-VAE intergration
 - ⬜ Multi-character support
 - ⬜ UI integration for easily streaming interaction
 - ⬜ TTS integration
@@ -111,6 +113,11 @@ conda install -c nvidia/label/cuda-12.4.1 cudatoolkit -y
 ### 3. Install PyTorch & Flash Attention
 ```bash
 pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
+
+# If you are using NVIDIA Hopper architecture (H100/H200, etc.), FlashAttention 3 is recommended for a significant speedup:
+pip install flash_attn_3 --find-links https://windreamer.github.io/flash-attention3-wheels/cu128_torch280 --extra-index-url https://download.pytorch.org/whl/cu128
+
+# Otherwise, use FlashAttention 2:
 pip install flash-attn==2.8.3 --no-build-isolation
 ```
 

@@ -41,3 +41,4 @@ supervision
 sam2
 insightface
 opencv-python
+gradio

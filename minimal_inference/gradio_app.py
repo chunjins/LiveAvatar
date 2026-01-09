@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import warnings
+import gc
 from datetime import datetime
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -289,6 +290,16 @@ def initialize_pipeline(args, training_settings):
     global wan_s2v_pipeline, global_args, global_cfg, global_training_settings
     global global_rank, global_world_size, global_save_rank
     
+    # Cleanup existing pipeline if it exists
+    if wan_s2v_pipeline is not None:
+        logging.info("Cleaning up existing pipeline to free GPU memory...")
+        # Clear the pipeline reference
+        wan_s2v_pipeline = None
+        # Force garbage collection
+        gc.collect()
+        # Empty CUDA cache
+        torch.cuda.empty_cache()
+    
     rank = int(os.getenv("RANK", 0))
     world_size = int(os.getenv("WORLD_SIZE", 1))
     
@@ -308,14 +319,17 @@ def initialize_pipeline(args, training_settings):
         logging.info(f"offload_model is not specified, set to {args.offload_model}.")
     
     torch.cuda.set_device(local_rank)
-    dist.init_process_group(
-        backend="nccl",
-        init_method="env://",
-        rank=rank,
-        world_size=world_size)
+    
+    if not dist.is_initialized():
+        dist.init_process_group(
+            backend="nccl",
+            init_method="env://",
+            rank=rank,
+            world_size=world_size)
+    
     if world_size > 1:
-        assert world_size >= 5, "At least 5 GPUs are supported for distributed inference."
-        assert args.num_gpus_dit == 4, "Only 4 GPUs are supported for distributed inference."
+        # assert world_size >= 5, "At least 5 GPUs are supported for distributed inference."
+        # assert args.num_gpus_dit == 4, "Only 4 GPUs are supported for distributed inference."
         assert args.enable_vae_parallel is True, "VAE parallel is required for distributed inference."
         args.single_gpu = False
         from liveavatar.models.wan.causal_s2v_pipeline_tpp import WanS2V
@@ -371,7 +385,7 @@ def initialize_pipeline(args, training_settings):
 
                 
             if args.lora_path_dmd is not None:
-                wan_s2v.add_lora_to_model(
+                wan_s2v.noise_model = wan_s2v.add_lora_to_model(
                     wan_s2v.noise_model,
                     lora_rank=training_settings['lora_rank'],
                     lora_alpha=training_settings['lora_alpha'],
@@ -410,11 +424,14 @@ def run_single_sample(prompt, image_path, audio_path, num_clip,
     
     # In multi-GPU mode, rank 0 broadcasts inputs to other ranks waiting in worker_loop
     if dist.is_initialized() and global_rank == 0:
-        inputs = [prompt, image_path, audio_path, num_clip, 
+        # Format: [command, prompt, image_path, audio_path, num_clip, 
+        #          sample_steps, sample_guide_scale, infer_frames,
+        #          size, base_seed, sample_solver, lora_path, load_lora]
+        inputs = ["infer", prompt, image_path, audio_path, num_clip, 
                  sample_steps, sample_guide_scale, infer_frames,
-                 size, base_seed, sample_solver]
+                 size, base_seed, sample_solver, None, None]
         dist.broadcast_object_list(inputs, src=0)
-        logging.info(f"[Rank 0] Broadcast inputs to other ranks")
+        logging.info(f"[Rank 0] Broadcast inference inputs to other ranks")
     
     # Now rank 0 also participates in the actual computation
     video_path = _run_inference_computation(
@@ -427,11 +444,44 @@ def run_single_sample(prompt, image_path, audio_path, num_clip,
     # and are waiting at the next broadcast_object_list().
     # Rank 0 must send an "idle" signal to unblock them before returning to Gradio.
     if dist.is_initialized() and global_rank == 0:
-        idle_signal = [None, None, None, None, None, None, None, None, None, None]
+        idle_signal = ["idle"] + [None] * 12
         dist.broadcast_object_list(idle_signal, src=0)
         logging.info(f"[Rank 0] Sent idle signal, workers can continue waiting for next request")
     
     return video_path
+
+
+def reload_pipeline_command(use_lora, lora_path):
+    """
+    Command to reload the pipeline with new LoRA settings.
+    Broadcasts to workers if in distributed mode.
+    """
+    global global_args, global_training_settings, global_rank
+    
+    logging.info(f"Reloading pipeline with use_lora={use_lora}, lora_path={lora_path}")
+    
+    # Update global args
+    global_args.load_lora = use_lora
+    global_args.lora_path_dmd = lora_path if lora_path else None
+    
+    if dist.is_initialized() and global_rank == 0:
+        # Broadcast reload signal
+        # command, prompt, image_path, audio_path, num_clip, sample_steps, sample_guide_scale, 
+        # infer_frames, size, base_seed, sample_solver, lora_path, load_lora
+        reload_signal = ["reload", None, None, None, None, None, None, None, None, None, None, global_args.lora_path_dmd, global_args.load_lora]
+        dist.broadcast_object_list(reload_signal, src=0)
+        logging.info(f"[Rank 0] Broadcast reload signal to other ranks")
+
+    # Re-initialize on rank 0
+    initialize_pipeline(global_args, global_training_settings)
+    
+    if dist.is_initialized() and global_rank == 0:
+        # Send idle signal to workers after reloading
+        idle_signal = ["idle"] + [None] * 12
+        dist.broadcast_object_list(idle_signal, src=0)
+        logging.info(f"[Rank 0] Sent idle signal after reload")
+        
+    return "模型重新加载成功 / Pipeline reloaded successfully!"
 
 
 def _run_inference_computation(prompt, image_path, audio_path, num_clip,
@@ -651,6 +701,19 @@ def create_gradio_interface():
                         value=global_args.sample_solver,
                         label="采样器 / Sampler"
                     )
+
+                with gr.Accordion("LoRA 设置 / LoRA Settings", open=False):
+                    gr.Markdown("### LoRA 权重 / LoRA Weights")
+                    use_lora_checkbox = gr.Checkbox(
+                        label="启用 LoRA / Enable LoRA", 
+                        value=global_args.load_lora
+                    )
+                    lora_path_input = gr.Textbox(
+                        label="LoRA 路径 / LoRA Path", 
+                        placeholder="输入 LoRA 权重的本地路径 / Enter local path to LoRA weights",
+                        value=global_args.lora_path_dmd or ""
+                    )
+                    reload_pipe_btn = gr.Button("🔄 重新加载模型 (应用 LoRA) / Reload Pipeline (Apply LoRA)", variant="secondary")
                 
                 generate_btn = gr.Button("🎬 开始生成 / Start Generation", variant="primary", size="lg")
             
@@ -723,6 +786,10 @@ def create_gradio_interface():
                 status = f"❌ 错误 / Error: {str(e)}"
                 return None, status
         
+        def reload_wrapper(use_lora, lora_path):
+            """Wrapper for pipeline reloading"""
+            return reload_pipeline_command(use_lora, lora_path)
+        
         def select_example_image(evt: gr.SelectData):
             """Handle example image selection"""
             selected_index = evt.index
@@ -759,6 +826,12 @@ def create_gradio_interface():
             ],
             outputs=[video_output, status_output]
         )
+
+        reload_pipe_btn.click(
+            fn=reload_wrapper,
+            inputs=[use_lora_checkbox, lora_path_input],
+            outputs=[status_output]
+        )
     
     return demo
 
@@ -774,27 +847,40 @@ def worker_loop():
     while True:
         try:
             # Wait for broadcast from rank 0
-            # When rank 0's Gradio UI triggers run_single_sample, it will broadcast inputs here
-            inputs = [None] * 10
+            # [command, prompt, image_path, audio_path, num_clip, sample_steps, sample_guide_scale, 
+            #  infer_frames, size, base_seed, sample_solver, lora_path, load_lora]
+            inputs = [None] * 13
             dist.broadcast_object_list(inputs, src=0)
             
-            prompt, image_path, audio_path, num_clip, \
-                sample_steps, sample_guide_scale, infer_frames, \
-                size, base_seed, sample_solver = inputs
+            command = inputs[0]
             
-            # If we receive a valid prompt, participate in computation
-            if prompt is not None and prompt != "":
-                logging.info(f"[Rank {global_rank}] Received valid inference request")
-                # Now do the actual computation (skip the broadcast part since we already received it)
-                _run_inference_computation(
-                    prompt, image_path, audio_path, num_clip,
-                    sample_steps, sample_guide_scale, infer_frames,
-                    size, base_seed, sample_solver
-                )
-                logging.info(f"[Rank {global_rank}] Generation completed")
-            else:
-                # Empty/idle broadcast from rank 0, just continue waiting
+            if command == "infer":
+                _, prompt, image_path, audio_path, num_clip, \
+                    sample_steps, sample_guide_scale, infer_frames, \
+                    size, base_seed, sample_solver, _, _ = inputs
+                
+                # If we receive a valid prompt, participate in computation
+                if prompt is not None and prompt != "":
+                    logging.info(f"[Rank {global_rank}] Received valid inference request")
+                    # Now do the actual computation (skip the broadcast part since we already received it)
+                    _run_inference_computation(
+                        prompt, image_path, audio_path, num_clip,
+                        sample_steps, sample_guide_scale, infer_frames,
+                        size, base_seed, sample_solver
+                    )
+                    logging.info(f"[Rank {global_rank}] Generation completed")
+            elif command == "reload":
+                _, _, _, _, _, _, _, _, _, _, _, lora_path, load_lora = inputs
+                logging.info(f"[Rank {global_rank}] Received reload request: load_lora={load_lora}, lora_path={lora_path}")
+                global_args.load_lora = load_lora
+                global_args.lora_path_dmd = lora_path
+                initialize_pipeline(global_args, global_training_settings)
+            elif command == "idle":
                 logging.debug(f"[Rank {global_rank}] Received idle signal, continuing to wait...")
+            else:
+                if command is not None:
+                    logging.warning(f"[Rank {global_rank}] Received unknown command: {command}")
+                
         except Exception as e:
             logging.error(f"[Rank {global_rank}] Error in worker loop: {e}")
             import traceback

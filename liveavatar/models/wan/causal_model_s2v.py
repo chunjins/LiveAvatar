@@ -33,7 +33,7 @@ from liveavatar.models.wan.wan_2_2.modules.s2v.model_s2v import (
     zero_module,
     torch_dfs
 )
-from liveavatar.models.wan.wan_2_2.modules.s2v.model_s2v import rope_apply as rope_apply, rope_apply as causal_rope_apply
+from liveavatar.models.wan.wan_2_2.modules.s2v.model_s2v import rope_apply as rope_apply, rope_apply as causal_rope_apply, rope_apply_cond as causal_rope_apply_cond
 from liveavatar.models.wan.wan_2_2.modules.s2v.model_s2v import rope_apply_usp as rope_apply_usp, rope_apply_usp as causal_rope_apply_usp
 
 from liveavatar.models.wan.wan_base.modules.attention import attention
@@ -44,6 +44,8 @@ from liveavatar.models.wan.wan_2_2.modules.s2v.s2v_utils import rope_precompute
 from liveavatar.models.wan.wan_2_2.distributed import util as dist_util
 from liveavatar.models.wan.wan_2_2.distributed.util import all_to_all,pad_chunk
 import torch.distributed as dist
+from liveavatar.models.wan.inference_utils import conditional_compile
+
 # wan 1.3B model has a weird channel / head configurations and require max-autotune to work with flexattention
 # see https://github.com/pytorch/pytorch/issues/133254
 # change to reduce-overhead for better distributed training performance
@@ -304,7 +306,7 @@ class CausalWanS2VSelfAttention(WanSelfAttention):
                     k=torch.cat(
                                 [
                                 kv_cache["k"][:, active_kv_cache_start:active_kv_cache_size],
-                                causal_rope_apply(
+                                causal_rope_apply_cond(
                                     kv_cache["cond_k"][:, :active_cond_cache_size], None, freqs_cond
                                     ).type_as(v)
                                 ],dim=1
@@ -319,14 +321,14 @@ class CausalWanS2VSelfAttention(WanSelfAttention):
                     window_size=self.window_size
                     )
             elif seg_idx[2]-seg_idx[1] > 0: #prefill cond caching
-                roped_query = causal_rope_apply(
+                roped_query = causal_rope_apply_cond(
                     q, grid_sizes, freqs).type_as(v) #grid_sizes不参与计算
                 kv_cache["cond_end"][0] = max(int(kv_cache["cond_end"]), seg_idx[2]-seg_idx[1])
                 kv_cache["cond_k"][:, :int(kv_cache["cond_end"])] = k[:,seg_idx[1]:seg_idx[2]]
                 kv_cache["cond_v"][:, :int(kv_cache["cond_end"])] = v[:,seg_idx[1]:seg_idx[2]]
                 x = flash_attention(
                     q=roped_query[:,seg_idx[1]:seg_idx[2]],
-                    k=causal_rope_apply(
+                    k=causal_rope_apply_cond(
                             k, grid_sizes, freqs
                         ).type_as(v)[:,:int(kv_cache["cond_end"])],
                     v=kv_cache["cond_v"][:, :int(kv_cache["cond_end"])],
@@ -527,7 +529,7 @@ class CausalWanModel_S2V(ModelMixin, ConfigMixin):
             rope_params(45000, 2 * (d // 6)),
             rope_params(45000, 2 * (d // 6))
         ],
-                               dim=1)
+                               dim=1).to("cuda")
         self.rope_cache = {}
 
         # initialize weights
