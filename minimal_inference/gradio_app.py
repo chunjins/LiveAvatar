@@ -265,6 +265,11 @@ def _parse_args():
         type=str,
         default="0.0.0.0",
         help="Server name for Gradio (0.0.0.0 for public access).")
+    parser.add_argument(
+        "--fp8",
+        action="store_true",
+        default=False,
+        help="Whether to enable fp8 quantization.")
     
     args = parser.parse_args()
     _validate_args(args)
@@ -394,6 +399,21 @@ def initialize_pipeline(args, training_settings):
                     pretrained_lora_path=args.lora_path_dmd,
                     load_lora_weight_only=False,
                 )
+        
+        if args.fp8:
+            if hasattr(torch, "_scaled_mm"):
+                from liveavatar.utils.fp8_linear import replace_linear_with_scaled_fp8
+                replace_linear_with_scaled_fp8(
+                    wan_s2v.noise_model,
+                    ignore_keys=[
+                        'text_embedding', 'time_embedding',
+                        'time_projection', 'head.head',
+                        'casual_audio_encoder.encoder.final_linear',
+                    ]
+                )
+
+            else:
+                logging.info(f"skip fp8_linear, Please update torch vision ")
 
         
         wan_s2v_pipeline = wan_s2v

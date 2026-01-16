@@ -32,5 +32,6 @@ CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES torchrun  \
     --single_gpu \
     --ckpt_dir ckpt/Wan2.2-S2V-14B/ \
     --server_port 7860 \
-    --server_name "0.0.0.0"
+    --server_name "0.0.0.0" \
+    --fp8
 

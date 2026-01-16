@@ -21,5 +21,6 @@ CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES torchrun --nproc_per_node=1 --master_
      --num_gpus_dit 1 \
      --sample_solver euler \
      --single_gpu \
-     --ckpt_dir ckpt/Wan2.2-S2V-14B/ 
+     --ckpt_dir ckpt/Wan2.2-S2V-14B/ \
+     --fp8
      
