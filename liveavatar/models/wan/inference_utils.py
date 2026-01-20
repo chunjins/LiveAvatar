@@ -1,6 +1,9 @@
 import torch
 STREAMING_VAE = True
-COMPILE = True
+# COMPILE = True
+import os
+COMPILE = os.getenv("ENABLE_COMPILE", "true").lower() == "true"
+print(f"COMPILE: {COMPILE}")
 torch._dynamo.config.cache_size_limit = 128
 
 NO_REFRESH_INFERENCE = False

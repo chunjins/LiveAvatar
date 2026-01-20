@@ -39,7 +39,7 @@
 
 </div>
 
-> **TL;DR:** **Live Avatar** is an algorithm–system co-designed framework that enables real-time, streaming, infinite-length interactive avatar video generation. Powered by a **14B-parameter** diffusion model, it achieves **30+ FPS** on multi-card **H100** GPUs with **4-step** sampling and supports **Block-wise Autoregressive** processing for **10,000+** second streaming videos.
+> **TL;DR:** **Live Avatar** is an algorithm–system co-designed framework that enables real-time, streaming, infinite-length interactive avatar video generation. Powered by a **14B-parameter** diffusion model, it achieves **45 FPS** on multi-card **H100** GPUs with **4-step** sampling and supports **Block-wise Autoregressive** processing for **10,000+** second streaming videos.
 
 <div align="center">
 
@@ -57,14 +57,16 @@
 ---
 ## ✨ Highlights
 
-> - ⚡ **​​Real-time Streaming Interaction**​​ - Achieve **30+** FPS real-time streaming with low latency
+> - ⚡ **​​Real-time Streaming Interaction**​​ - Achieve **45** FPS real-time streaming with low latency
 > - ♾️ ​​**​​Infinite-length Autoregressive Generation**​​​​ - Support **10,000+** second continuous video generation
 > - 🎨 ​​**​​Generalization Performances**​​​​ - Strong generalization across cartoon characters, singing, and diverse scenarios 
 
 
 ---
 ## 📰 News
-- **[2026.1.9]** 🚀 Major performance update! Inference speed boosted to **Peak 1.5x** and **Average 2x**, achieving stable **30+ FPS** on **multi-H100** setups. Fixed inference issues also bring noticeable **quality improvements**. A **quantized version** for **RTX 4090** real-time support is coming soon!
+- **[2026.1.20]** 🚀 Another major performance breakthrough! **FP8 quantization** enables inference on **48GB GPUs**, while advanced **compilation** and **cuDNN** attention boost speed to **~2.5x** peak and **3x** average FPS. Achieving stable **45+ FPS** on multi-H100 — share your results on different GPUs!
+- **[2026.1.9]** 🚀 Major performance update! Inference speed boosted to Peak 1.5x and Average 2x, achieving stable 30+ FPS on multi-H100 setups. Fixed inference issues also bring noticeable **quality 
+improvements**.
 - **[2025.12.16]** 🎉 LiveAvatar has reached **1,000+** stars on GitHub! Thank you to the community for the incredible support! ⭐
 - **[2025.12.12]** 🚀 We released **single-gpu** inference [Code](infinite_inference_single_gpu.sh) — no need for 5×H100 (house-priced server), a single 80GB VRAM GPU is enough to enjoy. 
 - **[2025.12.08]** 🚀 We released **real-time** inference [Code](infinite_inference_multi_gpu.sh) and the model [Weight](https://huggingface.co/Quark-Vision/Live-Avatar).
@@ -92,7 +94,7 @@
 - ✅ Multi-character support
 - ✅ Inference Acceleration Stage1 (RoPE optimization, compilation, LoRA merge)
 - ✅ Streaming-VAE intergration
-- ⬜ Inference Acceleration Stage2 (further compilation, L8A8)
+- ✅ Inference Acceleration Stage2 (further compilation, fp8, cudnn attn)
 - ⬜ UI integration for easily streaming interaction
 - ⬜ TTS integration
 - ⬜ Training code 
@@ -183,6 +185,10 @@ bash gradio_multi_gpu.sh
 
 > 💡 Currently, our TPP pipeline requires **five** GPUs for inference. We are planning to develop a 3-step version that can be deployed on a 4-GPU cluster.
 Furthermore, we are planning to integrate the [LightX2V](https://github.com/ModelTC/LightX2V) VAE component. This integration will eliminate the dependency on additional single-GPU VAE parallelism and support 4-step inference within a 4-GPU setup.
+
+> 💡 Compilation **(`ENABLE_COMPILE`)**: Enabling compilation will cause a long wait time during the first inference as the model compiles, but subsequent runs will see significant performance improvements. This is highly valuable for streaming long video scenarios. However, if you just want to quickly run a few test cases, we recommend disabling it by setting `export ENABLE_COMPILE=false` in your inference script.
+
+> 💡 FP8 Quantization **(`ENABLE_FP8`)**: FP8 offers **notable VRAM savings**, enabling inference on **48GB GPUs**, and also provides modest performance gains. Note that this may cause slight quality degradation. You can enable it by setting `export ENABLE_FP8=true` in your inference script.
 
 Please visit our [project page](https://liveavatar.github.io/) to see more examples and learn about the scenarios suitable for this model.
 ### Single-GPU Inference
