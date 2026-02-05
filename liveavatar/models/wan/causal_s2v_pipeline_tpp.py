@@ -130,7 +130,9 @@ class WanS2V:
 
         self.vae = Wan2_1_VAE(
             vae_pth=os.path.join(checkpoint_dir, config.vae_checkpoint),
-            device=self.device,dtype=self.param_dtype)
+            device=self.device,
+            dtype=self.param_dtype,
+            use_lightvae=getattr(config, 'use_lightvae', False))
 
         if self.is_training:
             from liveavatar.models.wan.flow_match import FlowMatchScheduler_Omni
@@ -1074,7 +1076,7 @@ class WanS2V:
                         timestep = [t] * self.num_frames_per_block
                         timestep = torch.tensor(timestep).to(self.device).unsqueeze(0)
                         
-
+                        # dit_start_time = time.time()
                         noise_pred_cond = self.noise_model(
                             [latent_model_input], t=timestep, **block_arg_c, 
                             kv_cache=self.kv_cache1, crossattn_cache=self.crossattn_cache,
@@ -1091,6 +1093,9 @@ class WanS2V:
                             return_dict=False,
                             generator=seed_g)[0]
                         block_latents = temp_x0.squeeze(0) #[16,num_frames_per_block,h,w]
+                        # torch.cuda.synchronize()
+                        # dit_time = time.time() - dit_start_time
+                        # print(f"[Rank {dist.get_rank()}] DIT timestep {i}/{len(timesteps)} (t={t:.3f}) for r={r} b={block_index}: {dit_time:.3f}s")
                         if self.tgt_gpu is None:
                             pass
                         else:
@@ -1120,13 +1125,18 @@ class WanS2V:
                                 pass
 
                         # decode to rgb
+                        # decode_start_time = time.time()
                         if r == 0 and block_index == 0:
                             decode_latents = motion_latents[:,:,:7]
                             self.vae.stream_decode(decode_latents)
                         decode_latents = block_latents.unsqueeze(0)
 
                         image = torch.stack(self.vae.stream_decode(decode_latents))
+                        # torch.cuda.synchronize()
+                        # decode_time = time.time() - decode_start_time
                         image = image[:, :, -(infer_frames)//num_blocks:] # 3
+                        # num_decoded_frames = image.shape[2]
+                        # print(f"[Rank {dist.get_rank()}] VAE decode for r={r} b={block_index}: {num_decoded_frames} frames in {decode_time:.3f}s ({num_decoded_frames/decode_time:.2f} FPS)")
                         
                         if r == 0 and block_index == 0:
                             image = image[:, :, 3:]#第一个clip第一个block保留0帧，后面3

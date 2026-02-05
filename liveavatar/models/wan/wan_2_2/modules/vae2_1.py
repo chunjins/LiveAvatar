@@ -271,7 +271,8 @@ class Encoder3d(nn.Module):
                  num_res_blocks=2,
                  attn_scales=[],
                  temperal_downsample=[True, True, False],
-                 dropout=0.0):
+                 dropout=0.0,
+                 pruning_rate=0.0):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -280,8 +281,10 @@ class Encoder3d(nn.Module):
         self.attn_scales = attn_scales
         self.temperal_downsample = temperal_downsample
 
-        # dimensions
+        # dimensions - apply pruning rate to all dims
         dims = [dim * u for u in [1] + dim_mult]
+        if pruning_rate > 0:
+            dims = [int(d * (1 - pruning_rate)) for d in dims]
         scale = 1.0
 
         # init block
@@ -375,7 +378,8 @@ class Decoder3d(nn.Module):
                  num_res_blocks=2,
                  attn_scales=[],
                  temperal_upsample=[False, True, True],
-                 dropout=0.0):
+                 dropout=0.0,
+                 pruning_rate=0.0):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -384,8 +388,10 @@ class Decoder3d(nn.Module):
         self.attn_scales = attn_scales
         self.temperal_upsample = temperal_upsample
 
-        # dimensions
+        # dimensions - apply pruning rate to all dims
         dims = [dim * u for u in [dim_mult[-1]] + dim_mult[::-1]]
+        if pruning_rate > 0:
+            dims = [int(d * (1 - pruning_rate)) for d in dims]
         scale = 1.0 / 2**(len(dim_mult) - 2)
 
         # init block
@@ -489,7 +495,8 @@ class WanVAE_(nn.Module):
                  num_res_blocks=2,
                  attn_scales=[],
                  temperal_downsample=[True, True, False],
-                 dropout=0.0):
+                 dropout=0.0,
+                 pruning_rate=0.0):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -498,14 +505,15 @@ class WanVAE_(nn.Module):
         self.attn_scales = attn_scales
         self.temperal_downsample = temperal_downsample
         self.temperal_upsample = temperal_downsample[::-1]
+        self.pruning_rate = pruning_rate  # For lightweight VAE (0.75) vs standard (0.0)
 
         # modules
         self.encoder = Encoder3d(dim, z_dim * 2, dim_mult, num_res_blocks,
-                                 attn_scales, self.temperal_downsample, dropout)
+                                 attn_scales, self.temperal_downsample, dropout, pruning_rate)
         self.conv1 = CausalConv3d(z_dim * 2, z_dim * 2, 1)
         self.conv2 = CausalConv3d(z_dim, z_dim, 1)
         self.decoder = Decoder3d(dim, z_dim, dim_mult, num_res_blocks,
-                                 attn_scales, self.temperal_upsample, dropout)
+                                 attn_scales, self.temperal_upsample, dropout, pruning_rate)
 
     def forward(self, x):
         mu, log_var = self.encode(x)
@@ -589,9 +597,17 @@ class WanVAE_(nn.Module):
         self._enc_feat_map = [None] * self._enc_conv_num
 
 
-def _video_vae(pretrained_path=None, z_dim=None, device='cpu', **kwargs):
+def _video_vae(pretrained_path=None, z_dim=None, device='cpu', pruning_rate=0.0, **kwargs):
     """
     Autoencoder3d adapted from Stable Diffusion 1.x, 2.x and XL.
+    
+    Args:
+        pretrained_path: Path to the VAE checkpoint file (.pth or .safetensors)
+        z_dim: Latent dimension
+        device: Device to load the model on
+        pruning_rate: Pruning rate for lightweight VAE (0.75 for lightvaew2_1.pth, 0.0 for standard)
+                     This is handled internally by Encoder3d/Decoder3d which multiply dims by (1-pruning_rate)
+        **kwargs: Additional keyword arguments for model configuration
     """
     # params
     cfg = dict(
@@ -601,7 +617,8 @@ def _video_vae(pretrained_path=None, z_dim=None, device='cpu', **kwargs):
         num_res_blocks=2,
         attn_scales=[],
         temperal_downsample=[False, True, True],
-        dropout=0.0)
+        dropout=0.0,
+        pruning_rate=pruning_rate)
     cfg.update(**kwargs)
 
     # init model
@@ -609,9 +626,17 @@ def _video_vae(pretrained_path=None, z_dim=None, device='cpu', **kwargs):
         model = WanVAE_(**cfg)
 
     # load checkpoint
-    logging.info(f'loading {pretrained_path}')
-    model.load_state_dict(
-        torch.load(pretrained_path, map_location=device), assign=True)
+    logging.info(f'loading {pretrained_path} (pruning_rate={pruning_rate})')
+    if pretrained_path.endswith('.safetensors'):
+        from safetensors import safe_open
+        state_dict = {}
+        with safe_open(pretrained_path, framework="pt", device=str(device)) as f:
+            for key in f.keys():
+                state_dict[key] = f.get_tensor(key)
+        model.load_state_dict(state_dict, assign=True)
+    else:
+        model.load_state_dict(
+            torch.load(pretrained_path, map_location=device), assign=True)
 
     return model
 
@@ -622,9 +647,21 @@ class Wan2_1_VAE:
                  z_dim=16,
                  vae_pth='cache/vae_step_411000.pth',
                  dtype=torch.float,
-                 device="cuda"):
+                 device="cuda",
+                 use_lightvae=False):
+        """
+        Wan 2.1 VAE wrapper.
+        
+        Args:
+            z_dim: Latent dimension (default: 16)
+            vae_pth: Path to VAE checkpoint (.pth or .safetensors)
+            dtype: Data type for computation
+            device: Device to load the model on
+            use_lightvae: If True, uses lightweight VAE with 75% pruning (lightvaew2_1.safetensors)
+        """
         self.dtype = dtype
         self.device = device
+        self.use_lightvae = use_lightvae
 
         mean = [
             -0.7571, -0.7089, -0.9113, 0.1075, -0.1745, 0.9653, -0.1517, 1.5508,
@@ -638,10 +675,14 @@ class Wan2_1_VAE:
         self.std = torch.tensor(std, dtype=dtype, device=device)
         self.scale = [self.mean, 1.0 / self.std]
 
+        # Set pruning rate based on whether using lightweight VAE
+        pruning_rate = 0.75 if use_lightvae else 0.0
+        
         # init model
         self.model = _video_vae(
             pretrained_path=vae_pth,
             z_dim=z_dim,
+            pruning_rate=pruning_rate,
         ).eval().requires_grad_(False).to(device,dtype)
 
     def encode(self, videos):
