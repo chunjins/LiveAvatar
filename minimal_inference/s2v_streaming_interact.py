@@ -370,7 +370,7 @@ def generate(args, training_settings):
         world_size=world_size)
     if world_size > 1:
         assert world_size >= 4, "At least 4 GPUs are supported for distributed inference."
-        assert args.num_gpus_dit == 4, "Only 4 GPUs are supported for distributed inference."
+        # assert args.num_gpus_dit == 4, "Only 4 GPUs are supported for distributed inference."
         # assert args.enable_vae_parallel is True, "VAE parallel is required for distributed inference."
         args.single_gpu = False
         from liveavatar.models.wan.causal_s2v_pipeline_tpp import WanS2V

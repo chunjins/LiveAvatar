@@ -13,9 +13,9 @@ s2v_14B.t5_checkpoint = 'models_t5_umt5-xxl-enc-bf16.pth'
 s2v_14B.t5_tokenizer = 'google/umt5-xxl'
 
 # vae
-# s2v_14B.vae_checkpoint = 'Wan2.1_VAE.pth'
-s2v_14B.vae_checkpoint = 'lightvaew2_1.pth'
-s2v_14B.use_lightvae = True  # Set to True when using lightvaew2_1.safetensors
+s2v_14B.vae_checkpoint = 'Wan2.1_VAE.pth'
+# s2v_14B.vae_checkpoint = 'lightvaew2_1.pth'
+s2v_14B.use_lightvae = False  # Set to True when using lightvaew2_1.safetensors
 
 s2v_14B.vae_stride = (4, 8, 8)
 

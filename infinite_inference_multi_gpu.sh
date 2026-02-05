@@ -59,10 +59,11 @@ torchrun --nproc_per_node=4 --master_port=29102  minimal_inference/s2v_streaming
      --infer_frames 48 \
      --load_lora \
      --lora_path_dmd "Quark-Vision/Live-Avatar" \
-     --sample_steps 4 \
+     --sample_steps 3 \
      --sample_guide_scale 0 \
      --num_clip 10000 \
-     --num_gpus_dit 4 \
+     --num_gpus_dit 3 \
+     --enable_vae_parallel \
      --sample_solver euler \
      --ckpt_dir ckpt/Wan2.2-S2V-14B/ \
      --fp8

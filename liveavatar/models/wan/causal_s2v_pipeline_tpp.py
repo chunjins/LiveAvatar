@@ -1000,7 +1000,7 @@ class WanS2V:
 
                 #-----------------------------------------------Temporal denoising loop in single clip---------------------------------
                 # 2.2.0 prefill cond caching
-                if (r==0 or r==1): # and (dist.get_rank() != num_gpus_dit-1+int(enable_vae_parallel)): #考虑要不要r==1的时候替换一下ref cond，如果要的话clip r=0的时候还不能并行，要让每卡都有clean的latent0
+                if (r==0 or r==1) and (dist.get_rank() != num_gpus_dit): #考虑要不要r==1的时候替换一下ref cond，如果要的话clip r=0的时候还不能并行，要让每卡都有clean的latent0
                     if r==1:
                         if dist.get_rank() != num_gpus_dit-1+int(enable_vae_parallel):
                             ref_latents = torch.empty_like(ref_latents).type_as(clip_latents[0])
