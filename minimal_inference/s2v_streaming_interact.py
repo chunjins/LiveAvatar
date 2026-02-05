@@ -369,9 +369,9 @@ def generate(args, training_settings):
         rank=rank,
         world_size=world_size)
     if world_size > 1:
-        assert world_size >= 5, "At least 5 GPUs are supported for distributed inference."
+        assert world_size >= 4, "At least 4 GPUs are supported for distributed inference."
         assert args.num_gpus_dit == 4, "Only 4 GPUs are supported for distributed inference."
-        assert args.enable_vae_parallel is True, "VAE parallel is required for distributed inference."
+        # assert args.enable_vae_parallel is True, "VAE parallel is required for distributed inference."
         args.single_gpu = False
         from liveavatar.models.wan.causal_s2v_pipeline_tpp import WanS2V
         print(f"Using TPP distributed inference.")
@@ -557,7 +557,7 @@ def generate(args, training_settings):
                                                                      "_")[:50]
             suffix = '.mp4'
             # args.save_file = f"{args.task}_{args.size.replace('*','x') if sys.platform=='win32' else args.size}_{args.ulysses_size}_{formatted_prompt}_{formatted_time}" + suffix
-            args.save_file = f"{formatted_time}_{args.sample_steps}step_{formatted_prompt}"
+            args.save_file = f"{args.num_gpus_dit}gpu_{formatted_time}_{args.sample_steps}step_{formatted_prompt}"
             # Only add lora suffix for .pt files (local paths with sufficient depth)
             path_parts = args.lora_path_dmd.split("/")
             if args.lora_path_dmd.endswith(".pt") and len(path_parts) >= 3:

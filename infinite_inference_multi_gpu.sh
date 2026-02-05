@@ -1,9 +1,50 @@
-CUDA_VISIBLE_DEVICES=0,1,2,3,4
+# --- LOAD MODULES ---
+module load bsc/1.0
+module load miniforge/25.3.0-3
+module load nvidia-hpc-sdk/23.9
+module load gcc/13.2.0
+module load cuda/12.8
+module load nccl/2.24.3-1
+module load ucx/1.19.0
+module load git/2.43.0
+module load ffmpeg
+
+# --- ACTIVATE VIRTUAL ENVIRONMENT ---
+# This ensures 'torchrun' uses your installed packages
+source .venv/bin/activate
+
+# --- ENVIRONMENT & CACHE FIXES ---
+# Prevents the "df: No such file" error on the cluster
+mkdir -p $HOME/.triton/autotune
+export TRITON_CACHE_DIR="$HOME/.triton"
+export HF_HUB_OFFLINE=1       # Prevent hanging on download checks
+export PYTHONUNBUFFERED=1     # Ensure you see logs immediately
+
+
+# --- MULTI-GPU CONFIG ---
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 export NCCL_DEBUG=WARN
 export NCCL_DEBUG_SUBSYS=OFF
-
 export ENABLE_COMPILE=true
-CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES torchrun --nproc_per_node=5 --master_port=29102  minimal_inference/s2v_streaming_interact.py \
+
+# Set timeout to 2 hours (in seconds)
+export NCCL_TIMEOUT=7200
+export NCCL_ASYNC_ERROR_HANDLING=1
+
+# Fix NCCL network interface issues on HPC clusters
+export NCCL_IB_DISABLE=0
+export NCCL_SOCKET_IFNAME=^docker0,lo
+export NCCL_IB_HCA=mlx5
+export NCCL_IB_GID_INDEX=3
+export NCCL_NET_GDR_LEVEL=5
+export NCCL_P2P_LEVEL=NVL
+
+# Use UCX for better InfiniBand support
+export NCCL_PROTO=Simple
+export NCCL_ALGO=Ring
+
+
+torchrun --nproc_per_node=4 --master_port=29102  minimal_inference/s2v_streaming_interact.py \
      --ulysses_size 1 \
      --task s2v-14B \
      --size "720*400" \
@@ -22,6 +63,5 @@ CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES torchrun --nproc_per_node=5 --master_
      --num_clip 10000 \
      --num_gpus_dit 4 \
      --sample_solver euler \
-     --enable_vae_parallel \
      --ckpt_dir ckpt/Wan2.2-S2V-14B/ \
      --fp8

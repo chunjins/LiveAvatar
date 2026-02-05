@@ -936,6 +936,9 @@ class WanS2V:
             out = []
             self.kv_cache1 = None
             active_nr = min(max_repeat, num_repeat)
+            generation_start_time = None  # Track when first frame is generated
+            total_frames_generated = 0
+            last_output_time = None  # For per-block timing
             for r in range(active_nr):
             #-------------------------------------------rollout loop------------------------------------------------------
                 #----------------------------------------------Step 2.1: clip-level init------------------------------------------------------ 
@@ -995,10 +998,11 @@ class WanS2V:
 
                 #-----------------------------------------------Temporal denoising loop in single clip---------------------------------
                 # 2.2.0 prefill cond caching
-                if (r==0 or r==1) and (dist.get_rank() != num_gpus_dit-1+int(enable_vae_parallel)): #考虑要不要r==1的时候替换一下ref cond，如果要的话clip r=0的时候还不能并行，要让每卡都有clean的latent0
+                if (r==0 or r==1): # and (dist.get_rank() != num_gpus_dit-1+int(enable_vae_parallel)): #考虑要不要r==1的时候替换一下ref cond，如果要的话clip r=0的时候还不能并行，要让每卡都有clean的latent0
                     if r==1:
-                        ref_latents = torch.empty_like(ref_latents).type_as(clip_latents[0])
-                        dist.broadcast(ref_latents, src=num_gpus_dit-1+int(enable_vae_parallel))
+                        if dist.get_rank() != num_gpus_dit-1+int(enable_vae_parallel):
+                            ref_latents = torch.empty_like(ref_latents).type_as(clip_latents[0])
+                            dist.broadcast(ref_latents, src=num_gpus_dit-1+int(enable_vae_parallel))
                     block_index = 0
                     block_latents = clip_latents[0][:, block_index *
                                     self.num_frames_per_block:(block_index + 1) * self.num_frames_per_block] #[16,f,h,w]
@@ -1101,7 +1105,7 @@ class WanS2V:
                                 print(f"WARNING: VAE serves as a bottleneck!")
 
                     #----------------------------------------------Step 2.3: block-level postprocess for vae---------------------------------
-                    if enable_vae_parallel and dist.get_rank() == num_gpus_dit-1+int(enable_vae_parallel):
+                    if dist.get_rank() == num_gpus_dit-1+int(enable_vae_parallel):
                         if offload_model:
                             print(f"offloading model to cpu")
                             self.noise_model.cpu()
@@ -1126,13 +1130,37 @@ class WanS2V:
                         
                         if r == 0 and block_index == 0:
                             image = image[:, :, 3:]#第一个clip第一个block保留0帧，后面3
-                 
-                        out.append(image.cpu())
+                        
+                        # Timing: sync GPU and measure time between outputs (start from r=3)
+                        torch.cuda.synchronize()
+                        current_time = time.time()
+                        num_frames_this_block = image.shape[2]
+                        
+                        if r >= 2:
+                            if last_output_time is not None:
+                                # Only count frames from r=4 onwards (after timing starts)
+                                total_frames_generated += num_frames_this_block
+                                block_time = current_time - last_output_time
+                                block_fps = num_frames_this_block / block_time
+                                print(f"[Rank {dist.get_rank()}] Block r={r} b={block_index}: {num_frames_this_block} frames in {block_time:.3f}s = {block_fps:.2f} FPS")
+                            else:
+                                generation_start_time = current_time
+                            last_output_time = current_time
 
+                        out.append(image.cpu())
+               
         #-------------------------------------- Step 3: full-video postprocess--------------------------------------
         if dist.is_initialized():
                 dist.barrier()
         if dist.get_rank() == num_gpus_dit-1+int(enable_vae_parallel):
+            print(f"============[Rank {dist.get_rank()}] return video.")
+            
+            if generation_start_time is not None and last_output_time is not None:
+                    total_time = last_output_time - generation_start_time
+                    avg_fps = total_frames_generated / total_time
+                    print(f"[Rank {dist.get_rank()}] === Generation Complete ===")
+                    print(f"[Rank {dist.get_rank()}] Total: {total_frames_generated} frames in {total_time:.2f}s = {avg_fps:.2f} FPS average")
+            
             videos = torch.cat(out, dim=2)
             del clip_noise, clip_latents, clip_output,block_latents
             self._sampler_timesteps = None

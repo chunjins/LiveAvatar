@@ -1,9 +1,33 @@
-CUDA_VISIBLE_DEVICES=0
+# --- LOAD MODULES ---
+module load bsc/1.0
+module load miniforge/25.3.0-3
+module load nvidia-hpc-sdk/23.9
+module load gcc/13.2.0
+module load cuda/12.8
+module load nccl/2.24.3-1
+module load ucx/1.19.0
+module load git/2.43.0
+module load ffmpeg
+
+# --- ACTIVATE VIRTUAL ENVIRONMENT ---
+# This ensures 'torchrun' uses your installed packages
+source .venv/bin/activate
+
+# --- ENVIRONMENT & CACHE FIXES ---
+# Prevents the "df: No such file" error on the cluster
+mkdir -p $HOME/.triton/autotune
+export TRITON_CACHE_DIR="$HOME/.triton"
+export HF_HUB_OFFLINE=1       # Prevent hanging on download checks
+export PYTHONUNBUFFERED=1     # Ensure you see logs immediately
+
+
+# --- MULTI-GPU CONFIG ---
+export CUDA_VISIBLE_DEVICES=0
 export NCCL_DEBUG=WARN
 export NCCL_DEBUG_SUBSYS=OFF
-
 export ENABLE_COMPILE=true
-CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES torchrun --nproc_per_node=1 --master_port=29101  minimal_inference/s2v_streaming_interact.py \
+
+torchrun --nproc_per_node=1 --master_port=29101  minimal_inference/s2v_streaming_interact.py \
      --ulysses_size 1 \
      --task s2v-14B \
      --size "704*384" \
